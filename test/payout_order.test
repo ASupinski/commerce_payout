@@ -1,0 +1,89 @@
+<?php
+
+/**
+ * @file
+ * initial try for tests for the commerce payout.
+ */
+
+class PayoutOrderTestCase extends DrupalWebTestCase {
+  protected $user;
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Payout Order',
+      'description' => 'Ensure our basic payout order functionality works',
+      'group' => 'Commerce_Payout',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp('commerce_payout');  
+    $this->user = $this->drupalCreateUser(array());
+  }
+  
+  public function test_commerce_payout_new() {
+    $commerce_payout = commerce_payout_new($this->user->uid);
+    $this->assertEqual($commerce_payout->type, 'commerce_payout');
+    $this->assertEqual($commerce_payout->status, 'pending');
+    $this->assertEqual($commerce_payout->uid, $this->user->uid);
+  }
+  
+  public function test_commerce_payout_find() {
+    $timestamp = time();
+    $commerce_payout = commerce_payout_find($this->user->uid, $timestamp);
+    $this->assertEqual($commerce_payout->type, 'commerce_payout');
+    $this->assertEqual($commerce_payout->status, 'pending');
+    $this->assertEqual($commerce_payout->uid, $this->user->uid);
+    $this->assertEqual($commerce_payout->commerce_payout_pay_date[LANGUAGE_NONE][0]['value'], $timestamp);
+    
+    commerce_order_save($commerce_payout);
+    
+    $commerce_payout2 = commerce_payout_find($this->user->uid, $timestamp);
+    
+    $this->assertEqual($commerce_payout->order_id, $commerce_payout2->order_id);
+    $this->assertEqual($commerce_payout2->type, 'commerce_payout');
+    $this->assertEqual($commerce_payout2->status, 'pending');
+    $this->assertEqual($commerce_payout2->uid, $this->user->uid);
+    $this->assertEqual($commerce_payout2->commerce_payout_pay_date[LANGUAGE_NONE][0]['value'], $timestamp);
+    
+  }
+  
+  public function test_commerce_payout_creation_from_line_item() {
+    $order = commerce_order_new($this->user->uid);
+    commerce_order_save($order);
+    $line_item = commerce_line_item_new('product', $order->order_id);
+    commerce_line_item_save($line_item);
+    
+    $result = commerce_payout_create_payout($line_item, $this->user);
+    
+    $payout = $result['payout'];
+    $payout_line_item = $result['payout_line_item'];
+    
+    $this->assert(is_object($payout));
+    $this->assert(is_object($payout_line_item));
+    
+    $referenced_line_item = commerce_payout_line_item_get_referenced_line_item($payout_line_item);
+    $this->assert(is_object($referenced_line_item));
+    $this->assertEqual($line_item->line_item_id, $referenced_line_item->line_item_id);
+    $this->assertEqual($line_item->commerce_total, $payout_line_item->commerce_total);
+    
+    $payout_line_item2 = commerce_line_item_load($payout_line_item->line_item_id);
+    $this->assert(is_object($payout_line_item2));
+    $referenced_line_item = commerce_payout_line_item_get_referenced_line_item($payout_line_item2);
+    $this->assert(is_object($referenced_line_item));
+    $this->assertEqual($line_item->line_item_id, $referenced_line_item->line_item_id);
+    $this->assertEqual($line_item->commerce_total, $payout_line_item2->commerce_total);
+    
+  }
+  
+  public function test_commerce_payout_date_calc() {
+    $order = commerce_order_new($this->user->uid);
+    commerce_order_save($order);
+    $line_item = commerce_line_item_new('product', $order->order_id);
+    commerce_line_item_save($line_item);
+    $payDate = date("Y-m-d H:i:s", $order->changed);
+    
+    rules_invoke_all('commerce_payout_calc_pay_date', $payDate, $this->user, $line_item, $order);
+    
+  }
+}

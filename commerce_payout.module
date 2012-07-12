@@ -1,0 +1,244 @@
+<?php
+
+/**
+ * @file
+ * Defines features and functions for the commerce payout.
+ */
+
+/**
+ * Implements hook_entity_info_alter().
+ */
+function commerce_payout_entity_info_alter(&$entity_info) {
+  $entity_info['commerce_order']['bundles']['commerce_payout'] = array('label' => 'Payout');
+  
+  $field_name = 'commerce_payout_pay_date';
+  $field = field_info_field($field_name);
+  $instance = field_info_instance('commerce_order', $field_name, 'commerce_payout');
+  if (empty($field)) {
+    $field = array(
+      'field_name' => 'commerce_payout_pay_date',
+      'type' => 'datestamp',
+      'cardinality' => 1,
+      'entity_types' => array(),
+      'translatable' => FALSE,
+      'locked' => FALSE,
+      'module' => 'date',
+      'settings' => array(
+        'granularity' => array(
+          'day' => 'day',
+          'hour' => 'hour',
+          'minute' => 'minute',
+          'month' => 'month',
+          'second' => 'second',
+          'year' => 'year',
+        ),
+        'repeat' => 0,
+        'timezone_db' => 'UTC',
+        'todate' => '',
+        'tz_handling' => 'utc',
+      )
+    );
+    
+    $field = field_create_field($field);
+  }
+  if (empty($instance)) {
+    field_create_instance(array(
+    'field_name' => 'commerce_payout_pay_date',
+    'entity_type' => 'commerce_order',
+    'bundle' => 'commerce_payout'));
+  }
+  
+  commerce_order_configure_order_type('commerce_payout');
+}
+
+function commerce_payout_menu() {
+  $items = array();
+  $items['admin/commerce/payouts'] = array(
+    'title' => 'Payouts',
+    'description' => 'Configure your payouts.',
+    'page callback' => 'system_admin_menu_block_page',
+    'access arguments' => array('access administration pages'),
+    'type' => MENU_NORMAL_ITEM,
+    'weight' => 10,
+    'file path' => drupal_get_path('module', 'system'),
+    'file' => 'system.admin.inc',
+  );
+
+ /* $items['payout/test/%'] = array(
+    'title' => 'payouts_test',
+    'description' => 'tests',
+    'page callback' => 'os_payout_throwout_test',
+    'page arguments' => array(2),
+    'access arguments' => array('access administration pages'),
+                                  );*/
+  return $items;
+}
+/*
+function os_payout_throwout_test($timestamp) {
+  print date('m-d-Y H:i:s', $timestamp) . "<br>";
+  print date('m-d-Y H:i:s', _commerce_payout_get_pay_date($timestamp));
+}*/
+
+/**
+ * Payout Order work
+ */
+
+function commerce_payout_new($uid = 0) {
+  return commerce_order_new($uid, 'pending', 'commerce_payout');
+}
+
+function commerce_payout_find($uid, $payDate = REQUEST_TIME) {
+
+  $payout = commerce_payout_read($uid, $payDate);
+  if ($payout) {
+    return $payout;
+  }
+
+  $payout = commerce_payout_new($uid);
+  $payout->commerce_payout_pay_date[LANGUAGE_NONE][0]['value'] = $payDate;
+
+  return $payout;
+}
+
+function commerce_payout_read($uid, $payDate = REQUEST_TIME) {
+  $query = new EntityFieldQuery();
+
+  $entity_type = 'commerce_order';
+
+  $result = $query
+  ->entityCondition('entity_type', $entity_type)
+  ->entityCondition('bundle', 'commerce_payout')
+  ->propertyCondition('status', 'pending')
+  ->propertyCondition('uid', $uid)
+  ->fieldCondition('commerce_payout_pay_date', 'value', $payDate, '=')
+  ->execute();
+
+  if (!is_array($result) || !array_key_exists($entity_type, $result)) {
+    return FALSE;
+  }
+
+  $orders = commerce_order_load_multiple(array_keys($result[$entity_type]), array());
+  return $orders ? reset($orders) : FALSE;
+}
+
+function commerce_payout_create_payout_item($order_id, $line_item) {
+  $payout_line_item = commerce_line_item_new('payout_line_item', $order_id);
+  commerce_payout_add_line_item_reference($payout_line_item, $line_item);
+
+  $line_item_wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+  commerce_payout_set_unit_price_amount($payout_line_item, $line_item_wrapper->commerce_total->amount->value(), 'gross_sales');
+  $payout_line_item->quantity = 1;
+
+  return $payout_line_item;
+}
+
+function commerce_payout_add_line_item_reference($line_item, $referenced_line_item) {
+  $line_item_wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+  $line_item_wrapper->commerce_payout_line_item = $referenced_line_item;
+}
+
+function commerce_payout_line_item_get_referenced_line_item($payout_line_item) {
+  foreach (entity_metadata_wrapper('commerce_line_item', $payout_line_item)->commerce_payout_line_item as $line_item_wrapper) {
+    return commerce_line_item_load($line_item_wrapper->value());
+  }
+
+  return FALSE;
+}
+
+function _commerce_payout_get_pay_date($base_timestamp) {
+  $time = strtotime("first day of next month", $base_timestamp);
+  $time = strtotime("+ 2 months", $time);
+  $timestring = date('d-m-Y', $time);
+  $time = strtotime( $timestring . ' 00:00:00');
+  return $time;
+}
+
+function commerce_payout_create_payout($line_item, $payee, $initialAmount = NULL, $initialAmountComponent = 'base_price') {
+  $order = commerce_order_load($line_item->order_id);
+
+  //use this when http://drupal.org/node/1153766 is fixed
+  //$payout_for_calculation = commerce_payout_new($payee->uid);
+  //rules_invoke_all('commerce_payout_calc_pay_date', $payout_for_calculation, $payee, $line_item, $order);
+
+  $payout = commerce_payout_find($payee->uid, _commerce_payout_get_pay_date($order->changed));
+  commerce_order_save($payout);// we need to save to get an order_id
+  $payout_line_item = commerce_payout_create_payout_item($payout->order_id, $line_item);
+
+  if ($initialAmount != NULL) {
+    commerce_payout_set_unit_price_amount($payout_line_item, $initialAmount, $initialAmountComponent);
+    $payout_line_item->quantity = 1;// we set the quantity to 1 because we just set the price to a specific amount so quantity doesn't come into play.
+  }
+
+  commerce_line_item_save($payout_line_item);
+
+  rules_invoke_all('commerce_payout_calculate_payout_price', $line_item, $order, $payout_line_item);
+  commerce_line_item_save($payout_line_item);
+
+  $payoutWrapper = entity_metadata_wrapper('commerce_order', $payout);
+  $payoutWrapper->commerce_line_items[] = $payout_line_item;
+
+  commerce_order_save($payout);
+
+  return array('payout_line_item' => $payout_line_item, 'payout' => $payout);
+}
+
+function commerce_payout_views_api() {
+  return array(
+    'api' => 2,
+    'path' => drupal_get_path('module', 'commerce_payout') . '/includes',
+    );
+}
+
+/*
+ * Mostly copied from commerce_line_item.rules.inc
+ */
+function commerce_payout_set_unit_price_amount($line_item, $amount, $component_name, $round_mode = COMMERCE_ROUND_HALF_UP) {
+  if (is_numeric($amount)) {
+    $wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+    $unit_price = commerce_price_wrapper_value($wrapper, 'commerce_unit_price', TRUE);
+
+    // Calculate the updated amount and create a price array representing the
+    // difference between it and the current amount.
+    $current_amount = $unit_price['amount'];
+    $updated_amount = commerce_round($round_mode, $amount);
+
+    $difference = array(
+      'amount' => $updated_amount - $current_amount,
+      'currency_code' => $unit_price['currency_code'],
+      'data' => array(),
+    );
+
+    // Set the amount of the unit price and add the difference as a component.
+    $wrapper->commerce_unit_price->amount = $updated_amount;
+
+    $wrapper->commerce_unit_price->data = commerce_price_component_add(
+      $wrapper->commerce_unit_price->value(),
+      $component_name,
+      $difference,
+      TRUE,
+      FALSE
+    );
+  }
+}
+
+function commerce_payout_commerce_price_formatted_components_alter(&$components, $item, $entity) {
+  if ($entity->type == 'commerce_payout' || $entity->type == 'payout_line_item') {
+      unset($components['base_price']);
+      $components['commerce_price_formatted_amount']['title'] = t('Total Due');
+  }
+}
+
+/**
+ * Implements hook_commerce_order_status_info().
+ */
+function commerce_payout_commerce_order_status_info() {
+  $order_statuses = array();
+
+  $order_statuses['paid'] = array(
+    'name' => 'paid',
+    'title' => t('Paid'),
+    'state' => 'completed',
+  );
+  
+  return $order_statuses;
+}

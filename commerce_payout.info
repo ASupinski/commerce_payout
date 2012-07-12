@@ -1,0 +1,15 @@
+name = Commerce Payout
+description = Framework to use Commerce for outgoing payments
+package = Commerce (contrib)
+dependencies[] = commerce
+dependencies[] = commerce_line_item
+dependencies[] = commerce_order
+dependencies[] = commerce_price
+dependencies[] = commerce_product
+dependencies[] = commerce_product_reference
+dependencies[] = date
+dependencies[] = views
+dependencies[] = rules
+core = 7.x
+
+files[] = test/payout_order.test

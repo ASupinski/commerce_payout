@@ -1,0 +1,20 @@
+<?php
+
+/**
+ * @file
+ * Defines installation for the commerce payout.
+ */
+
+/**
+ * Implements hook_field_schema().
+ */
+function commerce_payout_field_schema($field) {
+
+}
+
+/**
+ * Implements hook_install().
+ */
+function commerce_payout_install() {
+
+}
